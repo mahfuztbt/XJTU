@@ -1,0 +1,114 @@
+1. Sequential Pi
+package examples;
+import x10.util.Random;
+
+public class SeqPi {
+  public static def main(args:Rail[String]) {
+    val N = Int.parse(args(0));
+    var result:Double = 0;
+    val rand = new Random();
+    for(1..N) {
+      val x = rand.nextDouble();
+      val y = rand.nextDouble();
+      if(x*x + y*y <= 1) result++;
+    }
+    val pi = 4*result/N;
+    Console.OUT.println("The value of pi is " + pi);
+  }
+}
+
+2. Parallel Pi
+package examples;
+import x10.util.Random;
+
+public class ParPi {
+  public static def main(args:Rail[String]) {
+    val N = Int.parse(args(0)); val P = Int.parse(args(1));
+    var result:Double = 0;
+    finish for(1..P) async {
+      val myRand = new Random();
+      var myResult:Double = 0;
+      for(1..(N/P)) {
+        val x = myRand.nextDouble();
+        val y = myRand.nextDouble();
+        if(x*x + y*y <= 1) myResult++;
+      }
+      atomic result += myResult;
+    }
+    val pi = 4*result/N;
+    Console.OUT.println("The value of pi is " + pi);
+  }
+}
+
+3. Concurrent Collect Pi
+package examples;
+import x10.util.Random;
+
+public class CollectPi {
+  public static def main(args:Rail[String]) {
+    val N = Int.parse(args(0)); val P = Int.parse(args(1));
+    val result = finish(Reducible.SumReducer[Double]()) {
+      for(1..P) async {
+        val myRand = new Random();
+        var myResult:Double = 0;
+        for(1..(N/P)) {
+          val x = myRand.nextDouble();
+          val y = myRand.nextDouble();
+          if(x*x + y*y <= 1) myResult++;
+        }
+        offer myResult;
+      }
+    };
+    val pi = 4*result/N;
+    Console.OUT.println("The value of pi is " + pi);
+  }
+}
+
+4. Parallel Collect Pi   
+package examples;
+import x10.util.Random;
+
+public class MontyPi {
+  public static def main(args:Rail[String]) {
+    val N = Int.parse(args(0));
+    val result = finish(Reducible.SumReducer[Double]()) {
+      for(p in Place.places()) at(p) async {
+        val myRand = new Random();
+        var myResult:Double = 0;
+        for(1..(N/Place.numPlaces())) {
+          val x = myRand.nextDouble();
+          val y = myRand.nextDouble();
+          if(x*x + y*y <= 1) myResult++;
+        }
+        offer myResult;
+      }
+    };
+    val pi = 4*result/N;
+    Console.OUT.println("The value of pi is " + pi);
+  }
+}
+
+5.Distributed Pi SPMD
+package examples;
+import x10.util.Random;
+
+public class DistPi {
+  public static def main(args:Rail[String]) {
+    val N = Int.parse(args(0));
+    val result = GlobalRef[Cell[Double]](new Cell[Double](0));
+    finish for(p in Place.places()) at(p) async {
+      val myRand = new Random();
+      var myResult:Double = 0;
+      for(1..(N/Place.numPlaces())) {
+        val x = myRand.nextDouble();
+        val y = myRand.nextDouble();
+        if(x*x + y*y <= 1) myResult++;
+      }
+      val myFinalResult = myResult;
+      at(result) async atomic result()() += myFinalResult;
+    }
+    val pi = 4*result()()/N;
+    Console.OUT.println("The value of pi is " + pi);
+  }
+}
+
