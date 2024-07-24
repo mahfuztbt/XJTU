@@ -1,0 +1,321 @@
+#include <iostream>
+#include <fstream>
+#include <cmath>
+#include <chrono>
+#include <ros/ros.h>
+#include <geometry_msgs/Twist.h>
+#include <nav_msgs/Odometry.h>
+#include <sensor_msgs/LaserScan.h>
+
+using namespace std;
+
+struct EulerAngles {
+    double roll, pitch, yaw; // yaw is what you want, i.e. Th
+};
+
+struct Quaternion {
+    double w, x, y, z;
+};
+
+EulerAngles ToEulerAngles(Quaternion q) {
+    EulerAngles angles;
+    // roll (x-axis rotation)
+    double sinr_cosp = +2.0 * (q.w * q.x + q.y * q.z);
+    double cosr_cosp = +1.0 - 2.0 * (q.x * q.x + q.y * q.y);
+    angles.roll = atan2(sinr_cosp, cosr_cosp);
+    // pitch (y-axis rotation)
+    double sinp = +2.0 * (q.w * q.y - q.z * q.x);
+    if (fabs(sinp) >= 1)
+        angles.pitch = copysign(M_PI / 2, sinp); // use 90 degrees if out of range
+    else
+        angles.pitch = asin(sinp);
+    // yaw (z-axis rotation)
+    double siny_cosp = +2.0 * (q.w * q.z + q.x * q.y);
+    double cosy_cosp = +1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+    angles.yaw = atan2(siny_cosp, cosy_cosp);
+    return angles;
+}
+
+class RobotMove {
+public:
+    RobotMove();
+    void laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan);
+    void odomCallback(const nav_msgs::Odometry::ConstPtr& odomMsg);
+    void startMoving();
+    void transformMapPoint(ofstream& fp, double laserRange, double laserTh);
+    void PID_wallFollowing(double moveSpeed, double laserData);
+    void PID_to1stGap(double moveSpeed, double robotHeading);
+    void PID_to2ndGap(double moveSpeed, double robotHeading);
+    void PID_reachGoal(double moveSpeed, double robotHeading);
+
+private:
+    ros::NodeHandle node;
+    ros::Publisher commandPub;
+    ros::Subscriber laserSub;
+    ros::Subscriber odomSub;
+
+    double frontRange, leftRange, rightRange;
+    double mleftRange, mrightRange;
+    double frontAngle, leftAngle, rightAngle;
+    double mleftAngle, mrightAngle;
+
+    Quaternion robotQuat;
+    EulerAngles robotAngles;
+    double robotHeadAngle;
+
+    double PositionX = 0.0; // Initialize PositionX
+    double PositionY = 0.0; // Initialize PositionY
+    int stage = 1; // Initialize stage
+
+    double laserData[360];
+
+    // PID parameters for wall following
+    double kp1 = 0.01, ki1 = 0.001, kd1 = 0.001, ei_pre1 = 0;
+    double ed_pre1 = 0, landmark1_toWall = 0.3, Max_PID_output = 0.6;
+
+    // PID parameters for 1st gap
+    double kp2 = 0.01, ki2 = 0.001, kd2 = 0.001, ei_pre2 = 0;
+    double ed_pre2 = 0, landmark2_heading = 0;
+
+    // PID parameters for 2nd gap
+    double kp3 = 0.01, ki3 = 0.001, kd3 = 0.001, ei_pre3 = 0;
+    double ed_pre3 = 0, landmark3_heading = 0;
+
+    // PID parameters for reaching goal
+    double kp4 = 0.01, ki4 = 0.001, kd4 = 0.001, ei_pre4 = 0;
+    double ed_pre4 = 0, landmark5_heading = 0;
+
+    // Movement parameters
+    const double FORWARD_SPEED_HIGH = 0.5;
+    const double FORWARD_SPEED_MIDDLE = 0.3;
+    const double FORWARD_SPEED_LOW = 0.1;
+
+    // Landmark positions
+    double landmark1 = 1.0;
+    double landmark2 = 2.0;
+    double landmark3 = 3.0;
+    double landmark4 = 4.0;
+    double landmark5 = 5.0;
+
+    void moveStop();
+    double getRobotVelocity();
+};
+
+RobotMove::RobotMove() {
+    commandPub = node.advertise<geometry_msgs::Twist>("/cmd_vel", 10);
+    laserSub = node.subscribe("/scan", 10, &RobotMove::laserCallback, this);
+    odomSub = node.subscribe("/odom", 20, &RobotMove::odomCallback, this);
+
+    // Initialize angles
+    frontAngle = 0;
+    leftAngle = M_PI / 2;
+    rightAngle = -M_PI / 2;
+    mleftAngle = 3 * M_PI / 4;
+    mrightAngle = -3 * M_PI / 4;
+}
+
+void RobotMove::laserCallback(const sensor_msgs::LaserScan::ConstPtr& scan) {
+    frontRange = scan->ranges[0];
+    leftRange = scan->ranges[90];
+    rightRange = scan->ranges[270];
+    mleftRange = scan->ranges[45];
+    mrightRange = scan->ranges[315];
+
+    for (int i = 0; i < 360; ++i) {
+        laserData[i] = scan->ranges[i];
+    }
+}
+
+void RobotMove::odomCallback(const nav_msgs::Odometry::ConstPtr& odomMsg) {
+    robotQuat.x = odomMsg->pose.pose.orientation.x;
+    robotQuat.y = odomMsg->pose.pose.orientation.y;
+    robotQuat.z = odomMsg->pose.pose.orientation.z;
+    robotQuat.w = odomMsg->pose.pose.orientation.w;
+
+    robotAngles = ToEulerAngles(robotQuat);
+    robotHeadAngle = robotAngles.yaw;
+
+    PositionX = odomMsg->pose.pose.position.x;
+    PositionY = odomMsg->pose.pose.position.y;
+}
+
+void RobotMove::transformMapPoint(ofstream& fp, double laserRange, double laserTh) {
+    double localX, localY, globalX, globalY;
+    localX = laserRange * cos(laserTh);
+    localY = laserRange * sin(laserTh);
+    globalX = (localX * cos(robotHeadAngle) - localY * sin(robotHeadAngle)) + PositionX;
+    globalY = (localX * sin(robotHeadAngle) + localY * cos(robotHeadAngle)) + PositionY;
+
+    if (globalX < 0) globalX = 0;
+    else if (globalX > 2.5) globalX = 2.5;
+
+    if (globalY < 0) globalY = 0;
+    else if (globalY > 2.5) globalY = 2.5;
+
+    fp << globalX << " " << globalY << endl;
+}
+
+void RobotMove::PID_wallFollowing(double moveSpeed, double laserData) {
+    double ei, ed, err, output;
+    err = laserData - landmark1_toWall;
+    ei = ei_pre1 + err;
+    ed = err - ed_pre1;
+    ei_pre1 = ei;
+    ed_pre1 = ed;
+    output = kp1 * err + ki1 * ei + kd1 * ed;
+    if (output > Max_PID_output)
+        output = Max_PID_output;
+    else if (output < -Max_PID_output)
+        output = -Max_PID_output;
+    geometry_msgs::Twist msg;
+    msg.linear.x = moveSpeed;
+    msg.angular.z = output;
+    commandPub.publish(msg);
+}
+
+void RobotMove::PID_to1stGap(double moveSpeed, double robotHeading) {
+    double ei, ed, err, output;
+    err = landmark2_heading - robotHeading;
+    ei = ei_pre2 + err;
+    ed = err - ed_pre2;
+    ei_pre2 = ei;
+    ed_pre2 = ed;
+    output = kp2 * err + ki2 * ei + kd2 * ed;
+    if (output > Max_PID_output)
+        output = Max_PID_output;
+    else if (output < -Max_PID_output)
+        output = -Max_PID_output;
+    geometry_msgs::Twist msg;
+    msg.linear.x = moveSpeed;
+    msg.angular.z = output;
+    commandPub.publish(msg);
+}
+
+void RobotMove::PID_to2ndGap(double moveSpeed, double robotHeading) {
+    double ei, ed, err, output;
+    err = landmark3_heading - robotHeading;
+    ei = ei_pre3 + err;
+    ed = err - ed_pre3;
+    ei_pre3 = ei;
+    ed_pre3 = ed;
+    output = kp3 * err + ki3 * ei + kd3 * ed;
+    if (output > Max_PID_output)
+        output = Max_PID_output;
+    else if (output < -Max_PID_output)
+        output = -Max_PID_output;
+    geometry_msgs::Twist msg;
+    msg.linear.x = moveSpeed;
+    msg.angular.z = output;
+    commandPub.publish(msg);
+}
+
+void RobotMove::PID_reachGoal(double moveSpeed, double robotHeading) {
+    double ei, ed, err, output;
+    err = landmark5_heading - robotHeading;
+    ei = ei_pre4 + err;
+    ed = err - ed_pre4;
+    ei_pre4 = ei;
+    ed_pre4 = ed;
+    output = kp4 * err + ki4 * ei + kd4 * ed;
+    if (output > Max_PID_output)
+        output = Max_PID_output;
+    else if (output < -Max_PID_output)
+        output = -Max_PID_output;
+    geometry_msgs::Twist msg;
+    msg.linear.x = moveSpeed;
+    msg.angular.z = output;
+    commandPub.publish(msg);
+}
+
+void RobotMove::startMoving() {
+    std::ofstream laserFile("/home/mahfuz/ros_workspace/src/tutorial_pkg/laserData.csv");
+    std::ofstream laserMapFile("/home/mahfuz/ros_workspace/src/tutorial_pkg/laserMapData.csv");
+
+    if (!laserFile.is_open() || !laserMapFile.is_open()) {
+        ROS_ERROR("Failed to open CSV files for writing");
+        return;
+    }
+
+    ros::Rate rate(20); // Define rate for repeatable operations.
+    ROS_INFO("Start moving");
+
+    while (ros::ok()) { // keep spinning loop until user presses Ctrl+C
+        switch (stage) {
+            case 1: // wall following
+                if (PositionY < landmark1) {
+                    PID_wallFollowing(FORWARD_SPEED_HIGH, leftRange);
+                } else {
+                    stage = 2;
+                }
+                break;
+            case 2: // move toward the middle of the 1st gap
+                if (PositionX < landmark2) {
+                    PID_to1stGap(FORWARD_SPEED_MIDDLE, robotHeadAngle);
+                } else {
+                    stage = 3;
+                }
+                break;
+            case 3: // move toward the 2nd gap
+                if (PositionX < landmark3) {
+                    PID_to2ndGap(FORWARD_SPEED_MIDDLE, robotHeadAngle);
+                } else {
+                    stage = 4;
+                }
+                break;
+            case 4: // go through the 2nd gap
+                if (PositionX < landmark4) {
+                    PID_to2ndGap(FORWARD_SPEED_LOW, robotHeadAngle);
+                } else {
+                    stage = 5;
+                }
+                break;
+            case 5: // move towards the charger
+                if (PositionX < landmark5) {
+                    PID_reachGoal(FORWARD_SPEED_LOW, robotHeadAngle);
+                } else {
+                    stage = 6;
+                }
+                break;
+            case 6:
+                moveStop();
+                break;
+        }
+
+        for (int n = 0; n < 360; ++n) { // save laser data for view and check
+            laserFile << n << " " << laserData[n] << std::endl;
+        }
+
+        transformMapPoint(laserMapFile, frontRange, frontAngle);
+        transformMapPoint(laserMapFile, leftRange, leftAngle);
+        transformMapPoint(laserMapFile, rightRange, rightAngle);
+        transformMapPoint(laserMapFile, mleftRange, mleftAngle);
+        transformMapPoint(laserMapFile, mrightRange, mrightAngle);
+
+        ros::spinOnce();
+        rate.sleep();
+    }
+
+    laserFile.close();
+    laserMapFile.close();
+}
+
+void RobotMove::moveStop() {
+    // Define the logic to stop the robot
+    geometry_msgs::Twist msg;
+    msg.linear.x = 0;
+    msg.angular.z = 0;
+    commandPub.publish(msg);
+}
+
+double RobotMove::getRobotVelocity() {
+    // Define the logic to get the robot's velocity
+    return 0.0; // Placeholder
+}
+
+int main(int argc, char** argv) {
+    ros::init(argc, argv, "tutorial_pkg_node");
+    RobotMove move;
+    move.startMoving();
+    return 0;
+}
+
