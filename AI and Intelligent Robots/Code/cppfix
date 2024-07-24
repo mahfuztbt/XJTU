@@ -1,0 +1,122 @@
+#include "ros/ros.h"
+#include "geometry_msgs/Twist.h"
+#include "nav_msgs/Odometry.h"
+
+using namespace std;
+
+class RobotMove {
+public:  // Correct member access specifier
+    // Turnable parameters
+    constexpr const static double FORWARD_SPEED_LOW = 0.1;
+    constexpr const static double FORWARD_SPEED_MIDDLE = 0.3;
+    constexpr const static double FORWARD_SPEED_HIGH = 0.5;
+    constexpr const static double FORWARD_SPEED_STOP = 0;
+    constexpr const static double TURN_LEFT_SPEED_HIGH = 1.0;
+    constexpr const static double TURN_LEFT_SPEED_MIDDLE = 0.6;
+    constexpr const static double TURN_LEFT_SPEED_LOW = 0.3;
+    constexpr const static double TURN_RIGHT_SPEED_HIGH = -1.0;
+    constexpr const static double TURN_RIGHT_SPEED_MIDDLE = -0.6;
+    constexpr const static double TURN_RIGHT_SPEED_LOW = -0.3;
+    
+    RobotMove(); 
+    void startMoving(); 
+    void moveStop();
+    void moveForward(double forwardSpeed); 
+    void moveRight(double turn_right_speed);
+    void moveForwardRight(double forwardSpeed, double turn_right_speed);
+
+    // add the following code
+    void odomCallback(const nav_msgs::Odometry::ConstPtr& odomMsg);
+
+private: 
+    ros::NodeHandle node; 
+    ros::Publisher commandPub; 
+    ros::Subscriber odomSub; 
+
+    // Publisher to the robot's velocity command topic
+    // Subscriber to robot’s odometry topic
+
+    double PositionX = 0.3, PositionY = 0.3, landmark1 = 1.15, landmark2 = 0.9;
+    double homeX = 0.3, homeY = 0.3;
+};
+
+RobotMove::RobotMove() {
+    // Advertise a new publisher for the simulated robot's velocity command topic at 10Hz
+    commandPub = node.advertise<geometry_msgs::Twist>("cmd_vel", 10);
+    // Subscribe to the odom topic
+    odomSub = node.subscribe("odom", 20, &RobotMove::odomCallback, this);
+}
+
+// Send a velocity command
+void RobotMove::moveForward(double forwardSpeed) {
+    geometry_msgs::Twist msg;  // The default constructor to set all commands to 0
+    msg.linear.x = forwardSpeed;  // Drive forward at a given speed along the x-axis.
+    commandPub.publish(msg);
+}
+
+void RobotMove::moveStop() {
+    geometry_msgs::Twist msg;
+    msg.linear.x = FORWARD_SPEED_STOP;
+    commandPub.publish(msg);
+}
+
+void RobotMove::moveRight(double turn_right_speed) {
+    geometry_msgs::Twist msg;
+    msg.angular.z = turn_right_speed;
+    commandPub.publish(msg);
+}
+
+// Move forward and right at the same time
+void RobotMove::moveForwardRight(double forwardSpeed, double turn_right_speed) {
+    geometry_msgs::Twist msg;
+    msg.linear.x = forwardSpeed;
+    msg.angular.z = turn_right_speed;
+    commandPub.publish(msg);
+}
+
+// Add the callback function to determine the robot position
+void RobotMove::odomCallback(const nav_msgs::Odometry::ConstPtr& odomMsg) {
+    PositionX = odomMsg->pose.pose.position.x + homeX;
+    PositionY = odomMsg->pose.pose.position.y + homeY;
+}
+
+// Add the following function
+void RobotMove::startMoving() {
+    int stage = 1;
+    ros::Rate rate(20);  // Define rate for repeatable operations
+    ROS_INFO("Start moving");
+
+    while (ros::ok()) {  // Keep spinning loop until user presses Ctrl+C
+        switch (stage) {
+            case 1:  // The robot moves forward from home
+                if (PositionY < landmark1) {
+                    moveForward(FORWARD_SPEED_HIGH);
+                } else {
+                    stage = 2;
+                }
+                break;
+
+            case 2:  // The robot turns right toward the 1st gap
+                if (PositionX < landmark2) {
+                    moveForwardRight(FORWARD_SPEED_MIDDLE, TURN_RIGHT_SPEED_MIDDLE);
+                } else {
+                    stage = 3;
+                }
+                break;
+
+            case 3:  // The robot stops at the middle of the 1st gap
+                moveStop();
+                break;
+        }
+        ros::spinOnce();  // Allow ROS to process incoming messages
+        rate.sleep();  // Wait until defined time passes.
+    }
+}
+
+int main(int argc, char **argv) {
+    ros::init(argc, argv, "RobotMove");  // Initiate new ROS node named "stopper"
+    RobotMove robotMove;  // Create new RobotMove object
+    robotMove.startMoving();  // Start the movement
+    return 0;
+}
+
