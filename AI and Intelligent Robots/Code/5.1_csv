@@ -1,0 +1,112 @@
+#include <iostream>
+#include <cmath>
+#include <chrono>
+#include <ros/ros.h>
+#include <fstream> // Include this header for ofstream
+#include <geometry_msgs/Twist.h>
+#include <sensor_msgs/LaserScan.h>
+#include <string>
+#include <ros/duration.h>
+
+using namespace std::chrono;
+
+class RobotMove {
+public:
+    RobotMove() {
+        commandPub = node.advertise<geometry_msgs::Twist>("cmd_vel", 10);
+        laserSub = node.subscribe("scan", 1, &RobotMove::scanCallback, this);
+    }
+
+    void startMoving();
+
+private:
+    ros::NodeHandle node;
+    ros::Publisher commandPub;
+    ros::Subscriber laserSub;
+
+    ros::Time current_time;
+    ros::Duration real_time;
+
+    double frontRange, leftRange, rightRange, backLeftRange, backRightRange;
+    double frontRangeM = M_PI / 12, leftRangeM = 3 * M_PI / 4, rightRangeM = -3 * M_PI / 4;
+    double backLeftAngle = -M_PI, backRightAngle = -M_PI / 2;
+    double laserData[360];
+
+    void scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan);
+
+    void moveStop();
+    double getRobotVelocity();
+};
+
+void RobotMove::startMoving() {
+    // Use an absolute path or ensure the file is created in the correct directory
+    std::ofstream laserFile("/home/mahfuz/ros_workspace/src/tutorial_pkg/laserData.csv"); // Use absolute path
+
+    if (!laserFile.is_open()) {
+        ROS_ERROR("Failed to open laserData.csv for writing");
+        return;
+    }
+
+    auto currentTime = high_resolution_clock::now();
+    auto startTime = currentTime;
+
+    ros::Rate rate(10);
+    ROS_INFO("Start moving");
+
+    while (ros::ok()) {
+        int stage = 1; // Define 'stage' variable to avoid scope issue
+        switch (stage) {
+            case 1:
+                // some existing code
+                break;
+            case 6:
+                moveStop();
+                break;
+        }
+
+        for (int n = 0; n < 360; ++n) {
+            laserFile << n << " " << laserData[n] << std::endl;
+        }
+
+        currentTime = high_resolution_clock::now();
+        duration<double, std::deca> runTime = currentTime - startTime;
+        runTime *= 10;
+        double robVelocity = getRobotVelocity();
+        // Placeholder, replace with actual logic to get velocity
+        std::cout << ceil(runTime.count()) << " " << robVelocity << std::endl;
+
+        ros::spinOnce();
+        rate.sleep();
+    }
+
+    laserFile.close();
+}
+
+void RobotMove::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan) {
+    for (int i = 0; i < 36; ++i) {
+        laserData[i] = scan->ranges[i * 10];
+    }
+
+    frontRange = scan->ranges[0];
+    rightRange = scan->ranges[90];
+    leftRange = scan->ranges[270];
+    backLeftRange = scan->ranges[180];
+    backRightRange = scan->ranges[359];
+}
+
+void RobotMove::moveStop() {
+    // Define the logic to stop the robot
+}
+
+double RobotMove::getRobotVelocity() {
+    // Define the logic to get the robot's velocity
+    return 0.0; // Placeholder
+}
+
+int main(int argc, char** argv) {
+    ros::init(argc, argv, "tutorial_pkg_node");
+    RobotMove robot;
+    robot.startMoving();
+    return 0;
+}
+
