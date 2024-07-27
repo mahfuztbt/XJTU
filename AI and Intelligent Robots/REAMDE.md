@@ -1,1 +1,1 @@
-
+## 26.07.2024 - Last class- Last Lab- Report Submit This is my last at XJTU, if I don't go for PhD then last class of student life.
