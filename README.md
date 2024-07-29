@@ -1,10 +1,1 @@
-# XJTU
-What i am learning from xjtu
-
-
-Principle of Data Communication 
-
-update....
-
-new semester added
-.
+# XJTUThe courses I took at XJTU. 26.07.2024------------I am done with my classes, no more class no more homework from today. The last class was AI and Intelligent Robots
